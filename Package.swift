@@ -13,8 +13,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "PocketTTSBinary",
-            url: "https://github.com/alastairapple/pocket-tts-spm/releases/download/0.4.1/PocketTTS.xcframework.zip",
-            checksum: "60f91904720e227c8fab7ec64d389e75c1ec3294e3041b42a4df3f5f31c417d5"
+            url: "https://github.com/alastairapple/pocket-tts-spm/releases/download/0.4.3/PocketTTS.xcframework.zip",
+            checksum: "72d143239d5518866687b0c39fc50069955376bf2969e319dbdf70cd39de3f03"
         ),
         .target(
             name: "PocketTTSKit",
