@@ -5,25 +5,19 @@
 //  Swift wrapper for the Rust Pocket TTS implementation.
 //  Provides an async/await API for SwiftUI integration.
 //
+//  Derived from UnaMentis/pocket-tts-ios v0.4.1. The token-chunked streaming
+//  helper was removed here — the underlying engine only exposes sync synthesis
+//  plus `startTrueStreaming`, and this package's consumers use sync synthesis.
+//
 
 import Foundation
 
-// MARK: - Swift Wrapper
-
-/// Swift-native wrapper for Pocket TTS with async/await support
+/// Swift-native wrapper for Pocket TTS with async/await support.
 @available(iOS 17.0, *)
 public actor PocketTTSSwift {
 
     // MARK: - Types
 
-    /// Audio chunk from streaming synthesis
-    public struct AudioChunk: Sendable {
-        public let audioData: Data
-        public let sampleRate: UInt32
-        public let isFinal: Bool
-    }
-
-    /// Synthesis result
     public struct SynthesisResult: Sendable {
         public let audioData: Data
         public let sampleRate: UInt32
@@ -31,7 +25,6 @@ public actor PocketTTSSwift {
         public let durationSeconds: Double
     }
 
-    /// Voice information
     public struct Voice: Sendable, Identifiable {
         public let id: UInt32
         public let name: String
@@ -46,7 +39,6 @@ public actor PocketTTSSwift {
         }
     }
 
-    /// Configuration options
     public struct Config: Sendable {
         public var voiceIndex: UInt32
         public var temperature: Float
@@ -92,29 +84,22 @@ public actor PocketTTSSwift {
 
     // MARK: - Public API
 
-    /// Load the TTS model
-    public func load() async throws {
+    public func load() throws {
         engine = try PocketTtsEngine(modelPath: modelPath)
     }
 
-    /// Check if model is loaded
     public var isLoaded: Bool {
         engine?.isReady() ?? false
     }
 
-    /// Unload model to free memory
     public func unload() {
         engine?.unload()
         engine = nil
     }
 
-    /// Configure synthesis parameters
     public func configure(_ config: Config) throws {
-        guard let engine else {
-            throw PocketTTSSwiftError.modelNotLoaded
-        }
-
-        let rustConfig = TtsConfig(
+        guard let engine else { throw PocketTTSSwiftError.modelNotLoaded }
+        try engine.configure(config: TtsConfig(
             voiceIndex: config.voiceIndex,
             temperature: config.temperature,
             topP: config.topP,
@@ -122,133 +107,49 @@ public actor PocketTTSSwift {
             consistencySteps: config.consistencySteps,
             useFixedSeed: config.useFixedSeed,
             seed: config.seed
-        )
-
-        try engine.configure(config: rustConfig)
+        ))
     }
 
-    /// Get available voices
     public static var voices: [Voice] {
         availableVoices().map { info in
-            Voice(
-                index: info.index,
-                name: info.name,
-                gender: info.gender,
-                description: info.description
-            )
+            Voice(index: info.index, name: info.name, gender: info.gender, description: info.description)
         }
     }
 
-    /// Synthesize text to audio
-    public func synthesize(text: String) async throws -> SynthesisResult {
-        guard let engine else {
-            throw PocketTTSSwiftError.modelNotLoaded
-        }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            do {
-                let result = try engine.synthesize(text: text)
-                continuation.resume(returning: SynthesisResult(
-                    audioData: Data(result.audioData),
-                    sampleRate: result.sampleRate,
-                    channels: result.channels,
-                    durationSeconds: result.durationSeconds
-                ))
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+    public func synthesize(text: String) throws -> SynthesisResult {
+        guard let engine else { throw PocketTTSSwiftError.modelNotLoaded }
+        let result = try engine.synthesize(text: text)
+        return SynthesisResult(
+            audioData: Data(result.audioData),
+            sampleRate: result.sampleRate,
+            channels: result.channels,
+            durationSeconds: result.durationSeconds
+        )
     }
 
-    /// Synthesize with specific voice
-    public func synthesize(text: String, voice: UInt32) async throws -> SynthesisResult {
-        guard let engine else {
-            throw PocketTTSSwiftError.modelNotLoaded
-        }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            do {
-                let result = try engine.synthesizeWithVoice(text: text, voiceIndex: voice)
-                continuation.resume(returning: SynthesisResult(
-                    audioData: Data(result.audioData),
-                    sampleRate: result.sampleRate,
-                    channels: result.channels,
-                    durationSeconds: result.durationSeconds
-                ))
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+    public func synthesize(text: String, voice: UInt32) throws -> SynthesisResult {
+        guard let engine else { throw PocketTTSSwiftError.modelNotLoaded }
+        let result = try engine.synthesizeWithVoice(text: text, voiceIndex: voice)
+        return SynthesisResult(
+            audioData: Data(result.audioData),
+            sampleRate: result.sampleRate,
+            channels: result.channels,
+            durationSeconds: result.durationSeconds
+        )
     }
 
-    /// Streaming synthesis
-    public func synthesizeStreaming(text: String) -> AsyncThrowingStream<AudioChunk, Error> {
-        AsyncThrowingStream { continuation in
-            guard let engine = self.engine else {
-                continuation.finish(throwing: PocketTTSSwiftError.modelNotLoaded)
-                return
-            }
-
-            let handler = StreamingHandler(continuation: continuation)
-
-            Task {
-                do {
-                    try engine.startStreaming(text: text, handler: handler)
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-        }
-    }
-
-    /// Cancel ongoing synthesis
     public func cancel() {
         engine?.cancel()
     }
 
-    /// Model version
     public var version: String {
         engine?.modelVersion() ?? "unknown"
     }
 
-    /// Parameter count
     public var parameterCount: UInt64 {
         engine?.parameterCount() ?? 0
     }
 }
-
-// MARK: - Streaming Handler
-
-@available(iOS 17.0, *)
-private class StreamingHandler: TtsEventHandler {
-    private let continuation: AsyncThrowingStream<PocketTTSSwift.AudioChunk, Error>.Continuation
-
-    init(continuation: AsyncThrowingStream<PocketTTSSwift.AudioChunk, Error>.Continuation) {
-        self.continuation = continuation
-    }
-
-    func onAudioChunk(chunk: AudioChunk) {
-        continuation.yield(PocketTTSSwift.AudioChunk(
-            audioData: Data(chunk.audioData),
-            sampleRate: chunk.sampleRate,
-            isFinal: chunk.isFinal
-        ))
-    }
-
-    func onProgress(progress: Float) {
-        // Could emit progress events if needed
-    }
-
-    func onComplete() {
-        continuation.finish()
-    }
-
-    func onError(message: String) {
-        continuation.finish(throwing: PocketTTSSwiftError.synthesisError(message))
-    }
-}
-
-// MARK: - Errors
 
 @available(iOS 17.0, *)
 public enum PocketTTSSwiftError: Error, LocalizedError {
